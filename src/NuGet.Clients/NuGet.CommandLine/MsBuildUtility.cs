@@ -8,8 +8,10 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.InteropServices.ComTypes;
 using System.Text;
 using Microsoft.Build.Evaluation;
+using Microsoft.VisualStudio.Setup.Configuration;
 using NuGet.Commands;
 using NuGet.Common;
 
@@ -419,13 +421,19 @@ namespace NuGet.CommandLine
             }
             else
             {
-                // append ".0" if the userVersion is a number
+                // Force version string to 1 decimal place
                 string userVersionString = userVersion;
-                int unused;
-
-                if (int.TryParse(userVersion, out unused))
+                decimal parsedVersion = 0;
+                if (decimal.TryParse(userVersion, out parsedVersion))
                 {
-                    userVersionString = userVersion + ".0";
+                    decimal adjustedVersion = (decimal)(((int)(parsedVersion * 10)) / 10F);
+                    userVersionString = adjustedVersion.ToString("F1");
+                }
+
+                // MSBuild versions >15 require an alternative lookup
+                if (parsedVersion > 15)
+                {
+                    return FindMSBuildInstance();
                 }
 
                 Version ver;
@@ -571,6 +579,162 @@ namespace NuGet.CommandLine
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// Finds instances of MSBuild installed for versions after VS14
+        /// The rules for instance discovery are:
+        /// 1. If there is an MSBuild instance on the PATH, take the first one discovered
+        /// 2. Otherwise, take the most recent one installed
+        /// </summary>
+        /// <returns>Directory of instance we will use; null on fail (silent)</returns>
+        public static string FindMSBuildInstance()
+        {
+            //System.Diagnostics.Debugger.Launch();
+
+            var instances = GetInstalledInstances();
+            if (instances == null)
+            {
+                return null;
+            }
+
+            // Find first item in the MSBUILD_EXE_PATH to match an instance
+            var searchPath = Environment.GetEnvironmentVariable("MSBUILD_EXE_PATH");
+            if (!string.IsNullOrEmpty(searchPath))
+            {
+                var searchPathItems = new List<string>(searchPath.Split(new char[] { ';' }));
+                var matchedItem = searchPathItems.FirstOrDefault(searchPathItem =>
+                {
+                    var matchedInstance = instances.FirstOrDefault(instance =>
+                    {
+                        var installationPath = instance.GetInstallationPath();
+                        if (string.IsNullOrEmpty(installationPath))
+                        {
+                            return false;
+                        }
+
+                        var testMSBuildPath = Path.Combine(installationPath, "MSBuild");
+                        return testMSBuildPath.Equals(searchPathItem, StringComparison.InvariantCultureIgnoreCase);
+                    });
+
+                    return matchedInstance != null;
+                });
+
+                if (!string.IsNullOrEmpty(matchedItem))
+                {
+                    return matchedItem;
+                }
+            }
+
+            // PATH search failed - return latest install
+            string msBuildPath = string.Empty;
+            var latestInstance = instances.OrderByDescending(instance => ConvertFILETIMEToDateTime(instance.GetInstallDate()))
+                .FirstOrDefault(instance =>
+                {
+                    // Ensure an msbuild.exe in the VS install
+                    msBuildPath = GetMSBuildPathFromVsPath(instance.GetInstallationPath());
+                    return !string.IsNullOrEmpty(msBuildPath);
+                });
+
+            if (string.IsNullOrEmpty(msBuildPath))
+            {
+                return null;
+            }
+
+            return msBuildPath;
+        }
+
+        private static IEnumerable<ISetupInstance> GetInstalledInstances()
+        {
+            ISetupConfiguration configuration;
+            try
+            {
+                configuration = new SetupConfiguration() as ISetupConfiguration2;
+            }
+            catch (Exception)
+            {
+                return null; // No COM class
+            }
+
+            if (configuration == null)
+            {
+                return null;
+            }
+
+            var enumerator = configuration.EnumInstances();
+            if (enumerator == null)
+            {
+                return null;
+            }
+
+            var setupInstances = new List<ISetupInstance>();
+            while (true)
+            {
+                var fetchedInstances = new ISetupInstance[3];
+                int fetched;
+                enumerator.Next(fetchedInstances.Length, fetchedInstances, out fetched);
+                if (fetched == 0)
+                {
+                    break;
+                }
+
+                // fetched will return 3 even if only one instance returned
+                int index = 0;
+                while (fetched > 0)
+                {
+                    setupInstances.Add(fetchedInstances[index++]);
+                    fetched--;
+                }
+            }
+
+            if (setupInstances.Count == 0)
+            {
+                return null;
+            }
+
+            return setupInstances;
+        }
+
+        private static DateTime ConvertFILETIMEToDateTime(FILETIME time)
+        {
+            long highBits = time.dwHighDateTime;
+            highBits = highBits << 32;
+            return DateTime.FromFileTimeUtc(highBits | (long)(uint)time.dwLowDateTime);
+        }
+
+        private static string GetMSBuildPathFromVsPath(string vsPath)
+        {
+            if (string.IsNullOrEmpty(vsPath))
+            {
+                return null;
+            }
+
+            string msBuildRoot = Path.Combine(vsPath, "MSBuild");
+            if (!Directory.Exists(msBuildRoot))
+            {
+                return null;
+            }
+
+            // Enumerate all versions of MSBuild present, take the highest
+            string msBuildPath = string.Empty;
+            var highestVersionRoot = Directory.EnumerateDirectories(msBuildRoot).OrderByDescending(dir =>
+            {
+                var dirName = new DirectoryInfo(dir).Name;
+                float dirValue;
+                if (float.TryParse(dirName, out dirValue))
+                {
+                    return dirValue;
+                }
+
+                return 0F;
+            })
+            .FirstOrDefault(dir =>
+            {
+                msBuildPath = Path.Combine(dir, "bin");
+                return File.Exists(Path.Combine(msBuildPath, "msbuild.exe"));
+            });
+
+            return msBuildPath;
         }
     }
 }

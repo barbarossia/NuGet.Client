@@ -378,10 +378,12 @@ namespace NuGet.CommandLine
             List<Toolset> installedToolsets;
             using (var projectCollection = new ProjectCollection())
             {
-                installedToolsets = projectCollection.Toolsets.OrderByDescending(
+                installedToolsets = projectCollection.Toolsets?.OrderByDescending(
                     toolset => SafeParseVersion(toolset.ToolsVersion)).ToList();
             }
 
+            var installedVs15Toolsets = GetInstalledVs15Toolsets()?.ToList();
+            installedToolsets?.AddRange(installedVs15Toolsets ?? new List<Toolset>());
             return GetMsbuildDirectoryInternal(userVersion, console, installedToolsets);
         }
 
@@ -590,8 +592,6 @@ namespace NuGet.CommandLine
         /// <returns>Directory of instance we will use; null on fail (silent)</returns>
         public static string FindMSBuildInstance()
         {
-            //System.Diagnostics.Debugger.Launch();
-
             var instances = GetInstalledInstances();
             if (instances == null)
             {
@@ -683,6 +683,63 @@ namespace NuGet.CommandLine
                 while (fetched > 0)
                 {
                     setupInstances.Add(fetchedInstances[index++]);
+                    fetched--;
+                }
+            }
+
+            if (setupInstances.Count == 0)
+            {
+                return null;
+            }
+
+            return setupInstances;
+        }
+
+        private static IEnumerable<Toolset> GetInstalledVs15Toolsets()
+        {
+            ISetupConfiguration configuration;
+            try
+            {
+                configuration = new SetupConfiguration() as ISetupConfiguration2;
+            }
+            catch (Exception)
+            {
+                return null; // No COM class
+            }
+
+            if (configuration == null)
+            {
+                return null;
+            }
+
+            var enumerator = configuration.EnumInstances();
+            if (enumerator == null)
+            {
+                return null;
+            }
+
+            var setupInstances = new List<Toolset>();
+            while (true)
+            {
+                var fetchedInstances = new ISetupInstance[3];
+                int fetched;
+                enumerator.Next(fetchedInstances.Length, fetchedInstances, out fetched);
+                if (fetched == 0)
+                {
+                    break;
+                }
+
+                // fetched will return 3 even if only one instance returned
+                int index = 0;
+                while (fetched > 0)
+                {
+                    setupInstances.Add(new Toolset(
+                        toolsVersion: fetchedInstances[index].GetInstallationVersion(),
+                        toolsPath: fetchedInstances[index].GetInstallationPath(),
+                        projectCollection: null,
+                        msbuildOverrideTasksPath: string.Empty
+                    ));
+                    index++;
                     fetched--;
                 }
             }

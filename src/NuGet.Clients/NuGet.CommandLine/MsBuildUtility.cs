@@ -390,8 +390,12 @@ namespace NuGet.CommandLine
 
         // ideas: have a type which included Toolset instance, along with a date. Process collections of this type only.
         // let rules be: is it in msbuild_exe_path? Is it in PATH? Is it the highest version (processing major/
-        // minor rules as below)? If we have a stalemate between equal versions, can we resolve via latest version?
+        // minor rules as below)? If we have a stalemate between equal versions, can we resolve via latest install date?
         // How about adding an explicit path into the mix which overrides all?
+
+        // Also refactor together the duplicated logic below
+
+        // And write tests for all, refactoring for testability if necessary
 
 
 

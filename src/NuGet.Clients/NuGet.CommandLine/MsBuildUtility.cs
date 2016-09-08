@@ -387,6 +387,16 @@ namespace NuGet.CommandLine
             return GetMsbuildDirectoryInternal(userVersion, console, installedToolsets);
         }
 
+
+        // ideas: have a type which included Toolset instance, along with a date. Process collections of this type only.
+        // let rules be: is it in msbuild_exe_path? Is it in PATH? Is it the highest version (processing major/
+        // minor rules as below)? If we have a stalemate between equal versions, can we resolve via latest version?
+        // How about adding an explicit path into the mix which overrides all?
+
+
+
+
+
         // This method is called by GetMsbuildDirectory(). This method is not intended to be called directly.
         // It's marked public so that it can be called by unit tests.
         public static string GetMsbuildDirectoryInternal(
@@ -642,57 +652,6 @@ namespace NuGet.CommandLine
             }
 
             return msBuildPath;
-        }
-
-        private static IEnumerable<ISetupInstance> GetInstalledInstances()
-        {
-            ISetupConfiguration configuration;
-            try
-            {
-                configuration = new SetupConfiguration() as ISetupConfiguration2;
-            }
-            catch (Exception)
-            {
-                return null; // No COM class
-            }
-
-            if (configuration == null)
-            {
-                return null;
-            }
-
-            var enumerator = configuration.EnumInstances();
-            if (enumerator == null)
-            {
-                return null;
-            }
-
-            var setupInstances = new List<ISetupInstance>();
-            while (true)
-            {
-                var fetchedInstances = new ISetupInstance[3];
-                int fetched;
-                enumerator.Next(fetchedInstances.Length, fetchedInstances, out fetched);
-                if (fetched == 0)
-                {
-                    break;
-                }
-
-                // fetched will return 3 even if only one instance returned
-                int index = 0;
-                while (fetched > 0)
-                {
-                    setupInstances.Add(fetchedInstances[index++]);
-                    fetched--;
-                }
-            }
-
-            if (setupInstances.Count == 0)
-            {
-                return null;
-            }
-
-            return setupInstances;
         }
 
         private static IEnumerable<Toolset> GetInstalledVs15Toolsets()
